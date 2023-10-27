@@ -31,6 +31,7 @@ int main() {
 
         if( access("server-client", F_OK) == -1 ) {
             printf("Server offline.\n");
+            unlink("client-server");
             exit(1);
         }
 

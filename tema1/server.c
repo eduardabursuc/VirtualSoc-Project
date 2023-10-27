@@ -15,6 +15,7 @@
 void sigint ( int signal ){
     if( signal == SIGINT ) {
         unlink("server-client");
+        unlink("client-server");
         printf("\n");
         exit(0);
     }
