@@ -11,9 +11,11 @@
 #include <time.h>
 #include <signal.h>
 
+
 void sigint ( int signal ){
     if( signal == SIGINT ) {
         unlink("server-client");
+        printf("\n");
         exit(0);
     }
 }
@@ -74,7 +76,7 @@ int main() {
     signal(SIGINT, sigint);
 
     if ( mkfifo("server-client", 0666) < 0 ) {
-        printf("Eroare la crearea unui canal de comunicatie fifo.\n");
+        printf("Eroare la crearea unui canal de comunicare fifo.\n");
         exit(1);
     }
 
@@ -86,15 +88,25 @@ int main() {
     
     int fifo_cs;
 
-
     while( (fifo_cs = open("client-server", O_RDONLY )) < 0 ) {
         sleep(1);
     }
 
-    if ( read(fifo_cs, command, sizeof(command)) < 0 ) {
-        printf("Eroare la citire din fifo.\n");
-        exit(1);
+    if ( read(fifo_cs, command, sizeof(command)) < 0 || access("client-server", F_OK) < 0 ) {
+        // in moementul in care in clientul a facut un quit fortat (sigint)
+        // serverul va ramane blocat aici, iar o data ce vom crea din nou 
+        // canalul client-server trebuie sa fie deschis inca o data si setat
+        // clientul ca default (logged = false)
+        while( (fifo_cs = open("client-server", O_RDONLY )) < 0 ) {
+        sleep(1);
+        }
+        new_stat(0);
+        if(read(fifo_cs, command, sizeof(command)) < 0) {
+            printf("Eroare la citirea din fifo.\n");
+            exit(1);
+        }
     }
+
     close(fifo_cs);
 
     int fd[2], socket[2];
@@ -246,7 +258,9 @@ int main() {
     } else if( strcmp(command, "quit") == 0 ) {
 
 //QUIT
+
         new_stat(0);
+        unlink("client-server");
         int fifo_sc;
         if( (fifo_sc = open( "server-client", O_WRONLY | O_TRUNC)) < 0 ) {
             printf("Eroare la deschiderea fifo.\n");
@@ -258,7 +272,6 @@ int main() {
             exit(1);
         }
         close(fifo_sc);
-        unlink("client-server");
 
     } else if( strncmp(command, "get-proc-info : ", 16) == 0 ) {
 

@@ -10,6 +10,7 @@
 void sigint ( int signal ){
     if( signal == SIGINT ) {
         unlink("client-server");
+        printf("\n");
         exit(0);
     }
 }
@@ -19,7 +20,7 @@ int main() {
     signal(SIGINT, sigint);
 
     if ( mkfifo("client-server", 0666) < 0 ) {
-        printf("Eroare la crearea unui canal de comunicatie fifo.\n");
+        printf("Eroare la crearea unui canal de comunicare fifo.\n");
         exit(1);
     }
 
@@ -34,10 +35,10 @@ int main() {
         }
 
         if ( (fifo = open("client-server", O_WRONLY | O_TRUNC)) < 0 ) {
-            printf("Eroare la deschiderea unui canal de comunicatie fifo.\n");
+            printf("Eroare la deschiderea unui canal de comunicare fifo.\n");
             exit(1);
         }
-        
+
         fgets(command, 32, stdin);
 
         if( write(fifo, command, strlen(command)) < 0 ) {
@@ -53,7 +54,10 @@ int main() {
         }
         
         char response[1024] = "";
-        read(fifo, response, 1024);
+        if( read(fifo, response, sizeof(response)) < 0 ){
+            printf("Eroare la citire din fifo.\n");
+            exit(1);
+        }
         close(fifo);
 
         if( strcmp(response, "quit") == 0 ) {
