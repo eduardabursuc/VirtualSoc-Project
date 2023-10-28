@@ -11,20 +11,25 @@
 #include <time.h>
 #include <signal.h>
 
+int size;
+char *command;
 
 void sigint ( int signal ){
     if( signal == SIGINT ) {
         unlink("server-client");
         unlink("client-server");
+        free(command);
         printf("\n");
         exit(0);
     }
 }
 
-char response[1024];
-
 int check_stat() {
     FILE* stat = fopen("logged.txt", "r");
+    if( stat == NULL ) {
+        printf("Eroare la deschidere fisier logged.txt");
+        exit(1);
+    }
     int* status;
     fscanf(stat, "%d", status);
     fclose(stat);
@@ -72,6 +77,7 @@ bool login_user(char username[]) {
     
 }
 
+
 int main() {
 
     signal(SIGINT, sigint);
@@ -80,20 +86,21 @@ int main() {
         printf("Eroare la crearea unui canal de comunicare fifo.\n");
         exit(1);
     }
-
+    
     new_stat(0);
 
     while( 1 ) {
 
-    char command[32] = "", response[1024] = "";
-    
+    char response[1024] = "";
+
     int fifo_cs;
 
     while( (fifo_cs = open("client-server", O_RDONLY )) < 0 ) {
         sleep(1);
     }
 
-    if ( read(fifo_cs, command, sizeof(command)) < 0 || access("client-server", F_OK) < 0 ) {
+
+    if ( read(fifo_cs, &size, sizeof(int)) < 0 || access("client-server", F_OK) < 0 ) {
         // in moementul in care in clientul a facut un quit fortat (sigint)
         // serverul va ramane blocat aici, iar o data ce vom crea din nou 
         // canalul client-server trebuie sa fie deschis inca o data si setat
@@ -102,10 +109,17 @@ int main() {
         sleep(1);
         }
         new_stat(0);
-        if(read(fifo_cs, command, sizeof(command)) < 0) {
+        if(read(fifo_cs, &size, sizeof(int)) < 0) {
             printf("Eroare la citirea din fifo.\n");
             exit(1);
         }
+    }
+
+    command = (char *)malloc(size*sizeof(char));
+
+    if(read(fifo_cs, command, size) < 0) {
+        printf("Eroare la citirea din fifo.\n");
+        exit(1);
     }
 
     close(fifo_cs);
@@ -118,13 +132,11 @@ int main() {
     }
 
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, socket) < 0) 
-      { 
+    { 
         perror("Eroare la creare socketpair."); 
         exit(1); 
-      } 
+    } 
     
-
-    command[strlen(command)-1] = '\0';
 
     if( strncmp(command, "login : ", 8) == 0 ){
 
@@ -164,7 +176,12 @@ int main() {
                         exit(1);
                     }
                     close(fd[0]);
+                    size = strlen(response) + 1;
 
+                    if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+                        printf("Eroare la scrierea in fifo.\n");
+                        exit(1);
+                    }
                     if( write(fifo_sc, response, strlen(response)) < 0 ) {
                         printf("Eroare la scrierea in fifo.\n");
                         exit(1);
@@ -172,9 +189,11 @@ int main() {
                     close(fifo_sc);
 
         }
+
     } else if(strcmp(command, "logout") == 0) {
 
 //LOGOUT
+
 
         if( check_stat() ){
 
@@ -184,13 +203,19 @@ int main() {
         } else {
             strcpy(response, "Nu sunteti autentificati.");
         }
+        
 
         int fifo_sc;
         if( (fifo_sc = open( "server-client", O_WRONLY | O_TRUNC)) < 0 ) {
             printf("Eroare la deschiderea fifo.\n");
             exit(1);
         }
+        size = strlen(response) + 1;
 
+        if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+            printf("Eroare la scrierea in fifo.\n");
+            exit(1);
+        }
         if( write(fifo_sc, response, strlen(response)) < 0 ) {
             printf("Eroare la scrierea in fifo.\n");
             exit(1);
@@ -248,6 +273,11 @@ int main() {
                         exit(1);
                     }
                     close(socket[0]);
+                    size = strlen(response) + 1;
+                    if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+                        printf("Eroare la scrierea in fifo.\n");
+                        exit(1);
+                    }
                     if( write(fifo_sc, response, strlen(response)) < 0 ) {
                         printf("Eroare la scrierea in fifo.\n");
                         exit(1);
@@ -268,6 +298,11 @@ int main() {
             exit(1);
         }
         strcpy(response, "quit");
+        size = strlen(response) + 1;
+        if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+            printf("Eroare la scrierea in fifo.\n");
+            exit(1);
+        }
         if( write(fifo_sc, response, strlen(response)) < 0 ) {
             printf("Eroare la scrierea in fifo.\n");
             exit(1);
@@ -326,6 +361,11 @@ int main() {
                         exit(1);
                     }
                     close(socket[0]);
+                    size = strlen(response) + 1;
+                    if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+                        printf("Eroare la scrierea in fifo.\n");
+                        exit(1);
+                    }
                     if( write(fifo_sc, response, strlen(response)) < 0 ) {
                         printf("Eroare la scrierea in fifo.\n");
                         exit(1);
@@ -343,7 +383,13 @@ int main() {
         }
 
         strcpy(response, "Sintaxa gresita.");
-        
+        size = strlen(response) + 1;
+
+        if( write(fifo_sc, &size, sizeof(int)) < 0 ) {
+            printf("Eroare la scrierea in fifo.\n");
+            exit(1);
+        }
+
         if( write(fifo_sc, response, strlen(response)) < 0 ) {
             printf("Eroare la scrierea in fifo.\n");
             exit(1);
@@ -351,7 +397,10 @@ int main() {
         close(fifo_sc);
     }
 
+
  }
+
+ 
 
 }
              
