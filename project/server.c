@@ -14,7 +14,8 @@
 extern int errno;
 char answ[1000];
 
-struct User {
+struct User
+{
   int fd;
   char username[101];
 };
@@ -26,7 +27,7 @@ char *errMsg = 0;
 
 const char *createUsers = "CREATE TABLE IF NOT EXISTS users ("
                           "    username TEXT PRIMARY KEY,"
-                          "    password TEXT,"
+                          "    password TEXT NOT NULL,"
                           "    type_of_user TEXT,"
                           "    type_of_profile TEXT"
                           ");";
@@ -72,27 +73,10 @@ int createTables()
   return 0;
 }
 
-// REGISTRATION
-
-void regist(int fd)
+int userExists(char username[])
 {
-
-  char username[100] = "", passwd[100] = "", type[10] = "";
-
-  const char *selectDataSQL = "SELECT * FROM users WHERE username = ?;";
+  const char *selectDataSQL = "select * from users where username = ?;";
   sqlite3_stmt *statement;
-
-  strcpy(answ, "Doriti sa creati un cont de administrator sau client? (admin/user)");
-  write(fd, answ, strlen(answ));
-  read(fd, type, 10);
-  type[strlen(type) - 1] = '\0';
-
-  strcpy(answ, "Introduceti un username: ");
-  write(fd, answ, strlen(answ));
-  read(fd, username, 100);
-  username[strlen(username) - 1] = '\0';
-  printf("%s\n", username);
-
   if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
   {
     sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
@@ -100,34 +84,94 @@ void regist(int fd)
 
     if (selectResult != SQLITE_DONE)
     {
-      strcpy(answ, "Cont existent.");
-      write(fd, answ, strlen(answ));
+
+      return 1;
     }
     else
     {
-      strcpy(answ, "Introduceti o parola: ");
-      write(fd, answ, strlen(answ));
-      read(fd, passwd, 100);
-      passwd[strlen(passwd) - 1] = '\0';
 
-      fflush(stdout);
-      const char *selectDataSQL = "insert into users values (?, ?, ?, NULL);";
-      if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+      return 0;
+    }
+  }
+  else
+  {
+    return -1;
+  }
+}
+
+// REGISTRATION
+
+void registration(int fd)
+{
+
+  char username[100] = "", passwd[100] = "", type_acc[10] = "", type_usr[10] = "";
+
+  strcpy(answ, "Doriti sa creati un cont de administrator sau client? (admin/user)");
+  write(fd, answ, strlen(answ));
+  read(fd, type_usr, 10);
+
+  while (strcmp(type_usr, "admin") != 0 && strcmp(type_usr, "user") != 0)
+  {
+    bzero(type_usr, 10);
+    strcpy(answ, "Introduceti un cuvant cheie admin/user.");
+    write(fd, answ, strlen(answ));
+    read(fd, type_usr, 10);
+  }
+
+  strcpy(answ, "Doriti sa creati un cont public sau privat? (public/privat)");
+  write(fd, answ, strlen(answ));
+  read(fd, type_acc, 10);
+
+  while (strcmp(type_acc, "public") != 0 && strcmp(type_acc, "privat") != 0)
+  {
+    bzero(type_acc, 10);
+    strcpy(answ, "Introduceti un cuvant cheie public/privat.");
+    write(fd, answ, strlen(answ));
+    read(fd, type_acc, 10);
+  }
+
+  strcpy(answ, "Introduceti un username: ");
+  write(fd, answ, strlen(answ));
+  read(fd, username, 100);
+
+  int exists = userExists(username);
+
+  if (exists == 1)
+  {
+    strcpy(answ, "Cont existent.");
+    write(fd, answ, strlen(answ));
+  }
+  else if (exists == 0)
+  {
+    strcpy(answ, "Introduceti o parola: ");
+    write(fd, answ, strlen(answ));
+    read(fd, passwd, 100);
+    sqlite3_stmt *statement;
+
+    const char *selectDataSQL = "insert into users values (?, ?, ?, ?);";
+    if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+    {
+      sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 2, passwd, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 3, type_usr, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 4, type_acc, -1, SQLITE_STATIC);
+
+      if (sqlite3_step(statement) != SQLITE_DONE)
       {
-        sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
-        sqlite3_bind_text(statement, 2, passwd, -1, SQLITE_STATIC);
-        sqlite3_bind_text(statement, 3, type, -1, SQLITE_STATIC);
-
-        if (sqlite3_step(statement) != SQLITE_DONE)
-        {
-          // Handle the insertion error
-        }
+        strcpy(answ, "Datele introduse sunt invalide.");
+        write(fd, answ, strlen(answ));
+      }
+      else
+      {
+        strcpy(answ, "Inregistrare cu succes.");
+        write(fd, answ, strlen(answ));
       }
     }
   }
   else
   {
-    // error handler
+    strcpy(answ, "Eroare la cautarea numelui de utilizator in baza de date.");
+    write(fd, answ, strlen(answ));
   }
 }
 
@@ -135,18 +179,57 @@ void regist(int fd)
 
 void login(struct User user)
 {
+  char username[100] = "", passwd[100] = "";
 
-  // sqlite part : cautare in tabela users
+  strcpy(answ, "Username:");
+  write(user.fd, answ, strlen(answ));
+  read(user.fd, username, 10);
 
-  // daca gasim usernameul:
+  const char *selectDataSQL = "select password from users where username = ?;";
+  sqlite3_stmt *statement;
 
-  char passwd[100];
-  printf("Parola: ");
-  read(0, passwd, 100);
-  passwd[strlen(passwd)] = '\0';
+  if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+  {
+    sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
 
-  // comparam cu parola din tabel
-}
+    int selectResult = sqlite3_step(statement);
+
+    if (selectResult == SQLITE_ROW)
+    {
+      const char *password = (const char *)sqlite3_column_text(statement, 0);
+      printf("Password: %s\n", password);
+      
+      int times = 0;
+      while( strcmp(passwd, password) != 0 ) 
+      {
+        if( times == 0 ) { strcpy(answ, "Parola:"); times = 1;}
+        else strcpy(answ, "Parola gresita.\nIntroduceti alta parola:");
+        write(user.fd, answ, strlen(answ));
+        read(user.fd, passwd, 100);
+      }
+
+      strcpy(user.username, "");
+      strcpy(user.username, username);
+      strcpy(answ, "Logare cu succes.");
+      write(user.fd, answ, strlen(answ));
+      
+    }
+    else if (selectResult == SQLITE_DONE)
+    {
+      strcpy(answ, "Utilizatorul nu a fost gasit.");
+      write(user.fd, answ, strlen(answ));
+    }
+    else
+    {
+      strcpy(answ, "Eroare la extragerea datelor.");
+      write(user.fd, answ, strlen(answ));
+    }
+    sqlite3_finalize(statement);
+  }
+
+  }
+
+
 
 // SHOW-USERS
 
@@ -286,55 +369,47 @@ int main()
           continue;
         }
 
-        command[strlen(command) - 1] = '\0';
-
-        if (strncmp(command, "registration", 12) == 0)
+        if (strcmp(command, "registration") == 0)
         {
-          regist(user.fd);
-          // strcpy(answ, "Cerere de registrare.");
-          // write(fd, answ, strlen(answ));
+          registration(user.fd);
+          strcpy(answ, "Cerere de registrare.");
         }
         else if (strcmp(command, "login") == 0)
         {
-          // login(user);
-          strcpy(answ, "Cerere de logare.");
-          write(user.fd, answ, strlen(answ));
+          login(user);
+          //strcpy(answ, "Cerere de logare.");
         }
         else if (strcmp(command, "logout") == 0)
         {
           strcpy(answ, "Cerere de iesire din cont.");
-          write(user.fd, answ, strlen(answ));
         }
         else if (strncmp(command, "add-friend : ", 13) == 0)
         {
-
           strcpy(answ, "Cerere de adaugeare prieten.");
-          write(user.fd, answ, strlen(answ));
         }
         else if (strcmp(command, "new-post") == 0)
         {
-
           strcpy(answ, "Cerere de postare a unei noutati.");
-          write(user.fd, answ, strlen(answ));
         }
         else if (strcmp(command, "show-users") == 0)
         {
-
           strcpy(answ, "Cerere de afisare utilizatori.");
-          write(user.fd, answ, strlen(answ));
         }
         else if (strncmp(command, "chat : ", 7) == 0)
         {
-
           strcpy(answ, "Cerere de creare chat.");
-          write(user.fd, answ, strlen(answ));
+        }
+        else if (strncmp(command, "show-profile : ", 15) == 0)
+        {
+          strcpy(answ, "Cerere de vizualizare profil.");
         }
         else
         {
 
           strcpy(answ, "Comanda necunoscuta.");
-          write(user.fd, answ, strlen(answ));
         }
+
+       // write(user.fd, answ, strlen(answ));
       }
     }
   }

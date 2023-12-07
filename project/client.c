@@ -56,9 +56,14 @@ while(1) {
       perror ("[client]Eroare la read() din stdin.\n");
       return errno;
     }
+
+  while ( msg[0] == ' ' || msg[0] == '\t' || msg[0] == '\n' ) {
+    printf("Date invalide. Incercati din nou.\n");
+    read (0, msg, 100);
+  }
   
 
-  if (write (sd, msg, strlen(msg)) <= 0)
+  if (write (sd, msg, strlen(msg) - 1) <= 0)
     {
       perror ("[client]Eroare la write() spre server.\n");
       return errno;
