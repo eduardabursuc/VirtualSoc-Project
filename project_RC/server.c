@@ -1,30 +1,37 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <netinet/in.h>
-#include <unistd.h>
 #include <errno.h>
-#include <stdio.h>
-#include <arpa/inet.h>
+#include <unistd.h>
+#include <pthread.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <time.h>
 
 #define PORT 2222
 
-extern int errno;
-
-char answ[1000];
+char answ[1001];
 
 struct User
 {
   int fd;
   char username[101];
-};
+  int in_chat;
+} users[10001];
 
-// DATA TABLES
-
+int client_index = 0;
 sqlite3 *db;
 char *errMsg = 0;
+extern int errno;
+
+typedef struct thData
+{
+  int idThread;
+  int cl;
+} thData;
 
 const char *createUsers = "CREATE TABLE IF NOT EXISTS users ("
                           "    username TEXT PRIMARY KEY,"
@@ -34,7 +41,7 @@ const char *createUsers = "CREATE TABLE IF NOT EXISTS users ("
                           ");";
 
 const char *createFriends = "CREATE TABLE IF NOT EXISTS friends ("
-                            "    host_username TEXT PRIMARY KEY,"
+                            "    host_username TEXT,"
                             "    friend_username TEXT,"
                             "    type_of_friend TEXT"
                             ");";
@@ -97,6 +104,34 @@ int userExists(char username[])
   else
   {
     return -1;
+  }
+}
+
+int checkFriends(char host[], char friend[])
+{
+  const char *selectDataSQL = "SELECT * FROM friends WHERE host_username = ? AND friend_username = ?;";
+  sqlite3_stmt *statement;
+
+  if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) != SQLITE_OK)
+  {
+    fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+    return 2;
+  }
+
+  sqlite3_bind_text(statement, 1, host, -1, SQLITE_STATIC);
+  sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
+
+  int stepResult = sqlite3_step(statement);
+
+  if (stepResult != SQLITE_DONE)
+  {
+    sqlite3_finalize(statement);
+    return 1;
+  }
+  else
+  {
+    sqlite3_finalize(statement);
+    return 0;
   }
 }
 
@@ -196,7 +231,7 @@ void login(struct User *user)
 
     strcpy(answ, "Username:");
     write(user->fd, answ, strlen(answ));
-    read(user->fd, username, 10);
+    read(user->fd, username, 100);
 
     const char *selectDataSQL = "select password from users where username = ?;";
     sqlite3_stmt *statement;
@@ -277,7 +312,9 @@ void show_users(int fd)
 
 void add_friend(struct User user, char friend[])
 {
+
   char relationship[31] = "";
+  int a = 0;
 
   strcpy(answ, "Introduceti tipul de relatie (friend/close-friend):");
   write(user.fd, answ, strlen(answ));
@@ -290,22 +327,161 @@ void add_friend(struct User user, char friend[])
     read(user.fd, relationship, 31);
   }
 
-  const char *updateDataSQL = "update friends set type_of_friend = ? where host_username = ? and friend_username = ?;";
-  const char *selectDataSQL = "select * from friends where host_username = ? and friend_username = ?;";
+  const char *updateDataSQL = "UPDATE friends SET type_of_friend = ? WHERE host_username = ? AND friend_username = ?;";
+  const char *insertDataSQL = "INSERT INTO friends VALUES (?, ?, ?);";
+
+  sqlite3_stmt *statement;
+
+  if ((a = checkFriends(user.username, friend)) == 1 || checkFriends(friend, user.username) == 1)
+  {
+    // Record exists, perform update
+    if (sqlite3_prepare_v2(db, updateDataSQL, -1, &statement, 0) != SQLITE_OK)
+    {
+      fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+      strcpy(answ, "Eroare la pregatirea interogarii de actualizare.");
+      write(user.fd, answ, strlen(answ));
+      return;
+    }
+
+    sqlite3_bind_text(statement, 1, relationship, -1, SQLITE_STATIC);
+    if (a)
+    {
+      sqlite3_bind_text(statement, 2, user.username, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 3, friend, -1, SQLITE_STATIC);
+    }
+    else
+    {
+      sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 3, user.username, -1, SQLITE_STATIC);
+    }
+
+    if (sqlite3_step(statement) == SQLITE_DONE)
+    {
+      strcpy(answ, "Modificat cu succes.");
+      write(user.fd, answ, strlen(answ));
+    }
+    else
+    {
+      fprintf(stderr, "SQL error during update: %s\n", sqlite3_errmsg(db));
+      strcpy(answ, "Eroare la actualizarea datelor.");
+      write(user.fd, answ, strlen(answ));
+    }
+
+    sqlite3_finalize(statement);
+  }
+  else
+  {
+    // Record doesn't exist, perform insert
+    if (sqlite3_prepare_v2(db, insertDataSQL, -1, &statement, 0) != SQLITE_OK)
+    {
+      fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+      strcpy(answ, "Eroare la pregatirea interogarii de inserare.");
+      write(user.fd, answ, strlen(answ));
+      return;
+    }
+
+    sqlite3_bind_text(statement, 1, user.username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
+    sqlite3_bind_text(statement, 3, relationship, -1, SQLITE_STATIC);
+
+    if (sqlite3_step(statement) != SQLITE_DONE)
+    {
+      fprintf(stderr, "SQL error during insert: %s\n", sqlite3_errmsg(db));
+      strcpy(answ, "Eroare la inserarea datelor.");
+      write(user.fd, answ, strlen(answ));
+    }
+    else
+    {
+      strcpy(answ, "Inregistrare cu succes.");
+      write(user.fd, answ, strlen(answ));
+    }
+
+    sqlite3_finalize(statement);
+  }
+}
+
+// NEW-POST
+
+void new_post(struct User user)
+{
+
+  char type[21] = "";
+  char column[31] = "";
+  char content[10001] = "";
+
+  strcpy(answ, "Introduceti tipul postarii (public/friend/close-friend):");
+  write(user.fd, answ, strlen(answ));
+  read(user.fd, type, 21);
+
+  while (strcmp(type, "friend") != 0 && strcmp(type, "close-friend") != 0 && strcmp(type, "public") != 0)
+  {
+    strcpy(answ, "Introduceti doar cuvantul cheie (public/friend/close-friend):");
+    write(user.fd, answ, strlen(answ));
+    read(user.fd, type, 21);
+  }
+
+  const char *selectDataSQL;
+  const char *updateDataSQL;
+  const char *insertDataSQL;
+
+  if (type[0] == 'f')
+  {
+    selectDataSQL = "SELECT friend_posts FROM posts WHERE username = ?;";
+    updateDataSQL = "UPDATE posts SET friend_posts = ? WHERE username = ?;";
+    insertDataSQL = "INSERT INTO posts (username, friend_posts) VALUES (?, ?);";
+  }
+  else if (type[0] == 'c')
+  {
+    selectDataSQL = "SELECT close_friend_posts FROM posts WHERE username = ?;";
+    updateDataSQL = "UPDATE posts SET close_friend_posts = ? WHERE username = ?;";
+    insertDataSQL = "INSERT INTO posts (username, close_friend_posts) VALUES (?, ?);";
+  }
+  else
+  {
+    selectDataSQL = "SELECT public_posts FROM posts WHERE username = ?;";
+    updateDataSQL = "UPDATE posts SET public_posts = ? WHERE username = ?;";
+    insertDataSQL = "INSERT INTO posts (username, public_posts) VALUES (?, ?);";
+  }
+
+  strcpy(answ, "Introduceti continutul postarii ...");
+  write(user.fd, answ, strlen(answ));
+  read(user.fd, content, 10001);
+
+  // generating the post timestamp
+
+  time_t currentTime;
+  struct tm *timeInfo;
+
+  time(&currentTime);
+
+  timeInfo = localtime(&currentTime);
+
+  char formattedDateTime[20];
+  strftime(formattedDateTime, sizeof(formattedDateTime), "%Y-%m-%d %H:%M", timeInfo);
+
+  // adding the content in the data base
+
   sqlite3_stmt *statement;
 
   if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
   {
     sqlite3_bind_text(statement, 1, user.username, -1, SQLITE_STATIC);
-    sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
 
-    if (sqlite3_step(statement) != SQLITE_DONE)
+    int stepResult = sqlite3_step(statement);
+
+    if (stepResult == SQLITE_ROW)
     {
+      const char *stored_content = (const char *)sqlite3_column_text(statement, 0);
+
+      // formatting the post
+
+      char post[100001];
+      sprintf(post, "%s%s     %s\n%s\n\n", stored_content, user.username, formattedDateTime, content);
+
       if (sqlite3_prepare_v2(db, updateDataSQL, -1, &statement, 0) == SQLITE_OK)
       {
-        sqlite3_bind_text(statement, 1, relationship, -1, SQLITE_STATIC);
+        sqlite3_bind_text(statement, 1, post, -1, SQLITE_STATIC);
         sqlite3_bind_text(statement, 2, user.username, -1, SQLITE_STATIC);
-        sqlite3_bind_text(statement, 3, friend, -1, SQLITE_STATIC);
 
         if (sqlite3_step(statement) == SQLITE_DONE)
         {
@@ -315,80 +491,176 @@ void add_friend(struct User user, char friend[])
         else
         {
           fprintf(stderr, "SQL error during update: %s\n", sqlite3_errmsg(db));
-          strcpy(answ, "Eroare la introducerea datelor.");
+          strcpy(answ, "Eroare la actualizarea datelor.");
           write(user.fd, answ, strlen(answ));
-        }
-        sqlite3_finalize(statement);
-      }
-    }
-    else
-    {
-      sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0);
-      sqlite3_bind_text(statement, 1, friend, -1, SQLITE_STATIC);
-      sqlite3_bind_text(statement, 2, user.username, -1, SQLITE_STATIC);
-
-      if (sqlite3_step(statement) != SQLITE_DONE)
-      {
-        if (sqlite3_prepare_v2(db, updateDataSQL, -1, &statement, 0) == SQLITE_OK)
-        {
-          sqlite3_bind_text(statement, 1, relationship, -1, SQLITE_STATIC);
-          sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
-          sqlite3_bind_text(statement, 3, user.username, -1, SQLITE_STATIC);
-
-          if (sqlite3_step(statement) == SQLITE_DONE)
-          {
-            strcpy(answ, "Modificat cu succes.");
-            write(user.fd, answ, strlen(answ));
-          }
-          else
-          {
-            fprintf(stderr, "SQL error during update: %s\n", sqlite3_errmsg(db));
-            strcpy(answ, "Eroare la introducerea datelor.");
-            write(user.fd, answ, strlen(answ));
-          }
-
-          sqlite3_finalize(statement);
         }
       }
       else
       {
-        const char *insertDataSQL = "insert into friends values (?, ?, ?);";
-        if (sqlite3_prepare_v2(db, insertDataSQL, -1, &statement, 0) == SQLITE_OK)
-        {
-          sqlite3_bind_text(statement, 1, user.username, -1, SQLITE_STATIC);
-          sqlite3_bind_text(statement, 2, friend, -1, SQLITE_STATIC);
-          sqlite3_bind_text(statement, 3, relationship, -1, SQLITE_STATIC);
-
-          if (sqlite3_step(statement) != SQLITE_DONE)
-          {
-            strcpy(answ, "Datele introduse sunt invalide.");
-            printf("%s %s %s\n", user.username, friend, relationship);
-            write(user.fd, answ, strlen(answ));
-          }
-          else
-          {
-            strcpy(answ, "Inregistrare cu succes.");
-            write(user.fd, answ, strlen(answ));
-          }
-          sqlite3_finalize(statement);
-        }
+        fprintf(stderr, "SQL error : %s\n", sqlite3_errmsg(db));
+        strcpy(answ, "Eroare la pregatirea actualizarii.");
+        write(user.fd, answ, strlen(answ));
       }
+    }
+    else
+    {
+      // User doesn't have posts, insert new data
+      char post[10200];
+      sprintf(post, "%s     %s\n%s\n\n", user.username, formattedDateTime, content);
+
+      if (sqlite3_prepare_v2(db, insertDataSQL, -1, &statement, 0) != SQLITE_OK)
+      {
+        fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+        strcpy(answ, "Eroare la pregatirea interogarii de inserare.");
+        write(user.fd, answ, strlen(answ));
+        return;
+      }
+
+      sqlite3_bind_text(statement, 1, user.username, -1, SQLITE_STATIC);
+      sqlite3_bind_text(statement, 2, post, -1, SQLITE_STATIC);
+
+      if (sqlite3_step(statement) != SQLITE_DONE)
+      {
+        fprintf(stderr, "SQL error during insert: %s\n", sqlite3_errmsg(db));
+        strcpy(answ, "Eroare la inserarea datelor.");
+        write(user.fd, answ, strlen(answ));
+      }
+      else
+      {
+        strcpy(answ, "Inregistrare cu succes.");
+        write(user.fd, answ, strlen(answ));
+      }
+
+      sqlite3_finalize(statement);
     }
   }
   else
   {
-    strcpy(answ, "Eroare.");
+    strcpy(answ, "A intervenit o eroare.");
     write(user.fd, answ, strlen(answ));
   }
 }
 
-// NEW-POST
-
 // SHOW-PROFILE
+
+void show_profile(char username[], struct User user, int status)
+{
+  sqlite3_stmt *statement;
+  int a = 0;
+
+  if (status == 1 && (a = checkFriends(user.username, username)) == 1 || checkFriends(username, user.username))
+  {
+
+    const char *selectDataSQL = "SELECT type_of_friend FROM friends WHERE host_username = ? AND friend_username = ?;";
+
+    if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+    {
+      if (a)
+      {
+        sqlite3_bind_text(statement, 1, user.username, -1, SQLITE_STATIC);
+        sqlite3_bind_text(statement, 2, username, -1, SQLITE_STATIC);
+      }
+      else
+      {
+        sqlite3_bind_text(statement, 2, user.username, -1, SQLITE_STATIC);
+        sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
+      }
+
+      if (sqlite3_step(statement) == SQLITE_ROW)
+      {
+
+        const char *type = (const char *)sqlite3_column_text(statement, 0);
+
+        const char *selectDataSQL;
+
+        if (type[0] == 'f')
+        {
+          selectDataSQL = "SELECT friend_posts, public_posts FROM posts WHERE username = ?;";
+        }
+        else
+        {
+          selectDataSQL = "SELECT close_friend_posts, public_posts FROM posts WHERE username = ?;";
+        }
+
+        if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+        {
+          sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
+
+          if (sqlite3_step(statement) != SQLITE_DONE)
+          {
+
+            const char *friend_posts = (const char *)sqlite3_column_text(statement, 0);
+            const char *public_posts = (const char *)sqlite3_column_text(statement, 1);
+
+            strcpy(answ, "");
+
+            if (sqlite3_column_type(statement, 0) != SQLITE_NULL)
+              strcat(answ, friend_posts);
+
+            if (sqlite3_column_type(statement, 1) != SQLITE_NULL)
+              strcat(answ, public_posts);
+
+            write(user.fd, answ, strlen(answ));
+          }
+          else
+          {
+
+            strcpy(answ, "Utilizatorul nu are noutati publicate.");
+            write(user.fd, answ, strlen(answ));
+          }
+        }
+        else
+        {
+          strcpy(answ, "A intervenit o eroare (1).");
+          write(user.fd, answ, strlen(answ));
+        }
+      }
+      else
+      {
+        strcpy(answ, "A intervenit o eroare (2).");
+        write(user.fd, answ, strlen(answ));
+      }
+    }
+    else
+    {
+      fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+      strcpy(answ, "A intervenit o eroare (3).");
+      write(user.fd, answ, strlen(answ));
+    }
+  }
+  else
+  {
+    const char *selectDataSQL = "SELECT public_posts from posts NATURAL JOIN users WHERE type_of_profile = 'public' AND username = ?;";
+
+    if (sqlite3_prepare_v2(db, selectDataSQL, -1, &statement, 0) == SQLITE_OK)
+    {
+      sqlite3_bind_text(statement, 1, username, -1, SQLITE_STATIC);
+
+      int selectResult = sqlite3_step(statement);
+
+      if (selectResult == SQLITE_ROW)
+      {
+        const char *public_posts = (const char *)sqlite3_column_text(statement, 0);
+
+        write(user.fd, public_posts, strlen(public_posts));
+      }
+      else
+      {
+        strcpy(answ, "Utilizatorul nu are nici o postare publica.");
+        write(user.fd, answ, strlen(answ));
+      }
+    }
+    else
+    {
+      strcpy(answ, "A intervenit o eroare (4).");
+      write(user.fd, answ, strlen(answ));
+    }
+  }
+}
 
 // CHAT
 
-void chat(struct User users[], int n)
+void chat(struct User usrs[], int n)
 {
 
   char message[1001];
@@ -397,20 +669,20 @@ void chat(struct User users[], int n)
   for (int i = 1; i <= n; i++)
   {
     strcpy(answ, "Pregatire chat.");
-    write(users[i].fd, answ, strlen(answ));
+    write(usrs[i].fd, answ, strlen(answ));
   }
 
   while (n != 1)
   {
     fd_set readfds;
-    int nfds = users[0].fd;
+    int nfds = usrs[0].fd;
     FD_ZERO(&readfds);
 
     for (int i = 1; i <= n; i++)
     {
-      FD_SET(users[i].fd, &readfds);
-      if (nfds < users[i].fd)
-        nfds = users[i].fd;
+      FD_SET(usrs[i].fd, &readfds);
+      if (nfds < usrs[i].fd)
+        nfds = usrs[i].fd;
     }
 
     if (select(nfds + 1, &readfds, NULL, NULL, NULL) < 0)
@@ -420,20 +692,31 @@ void chat(struct User users[], int n)
 
     for (int i = 1; i <= n; i++)
     {
-      if (FD_ISSET(users[i].fd, &readfds))
+      if (FD_ISSET(usrs[i].fd, &readfds))
       {
         bzero(message, 1001);
-        if (read(users[i].fd, message, 1001) <= 0 || strcmp(message, "stop-chat") == 0)
+        if (read(usrs[i].fd, message, 1001) <= 0 || strcmp(message, "stop-chat") == 0)
         {
 
           strcpy(answ, "Ati iesit din chat.");
-          write(users[i].fd, answ, strlen(answ));
-          users[i] = users[n];
+          write(usrs[i].fd, answ, strlen(answ));
+          for (int j = 0; j < client_index; j++)
+          {
+            if (usrs[i].fd == users[j].fd)
+              users[j].fd = 0;
+          }
+          usrs[i].in_chat = 0;
+          usrs[i] = usrs[n];
           n--;
           if (n == 1)
           {
             strcpy(answ, "Chat inchis.");
-            write(users[i].fd, answ, strlen(answ));
+            write(usrs[i].fd, answ, strlen(answ));
+            for (int j = 0; j < client_index; j++)
+            {
+              if (usrs[i].fd == users[j].fd)
+                users[j].fd = 0;
+            }
           }
           printf("Server deconectat.\n");
           break;
@@ -442,14 +725,14 @@ void chat(struct User users[], int n)
         {
           for (int j = 1; j <= n; j++)
           {
-            if (users[i].fd != users[j].fd)
+            if (usrs[i].fd != usrs[j].fd)
             {
               char aux[1200];
               bzero(aux, 1200);
-              strcpy(aux, users[i].username);
+              strcpy(aux, usrs[i].username);
               strcat(aux, " : ");
               strcat(aux, message);
-              write(users[j].fd, aux, strlen(aux));
+              write(usrs[j].fd, aux, strlen(aux));
             }
           }
         }
@@ -458,35 +741,19 @@ void chat(struct User users[], int n)
   }
 }
 
-char *conv_addr(struct sockaddr_in address)
-{
-  static char str[25];
-  char port[7];
-
-  strcpy(str, inet_ntoa(address.sin_addr));
-  bzero(port, 7);
-  sprintf(port, ":%d", ntohs(address.sin_port));
-  strcat(str, port);
-  return (str);
-}
+static void *treat(void *);
+void handleCommand(thData *td);
 
 int main()
 {
+
   struct sockaddr_in server;
   struct sockaddr_in from;
-  fd_set readfds;
-  fd_set actfds;
-  struct timeval tv;
-  int client, sd;
-  int optval = 1;
-  int nfds;
-  int len;
-  struct User users[10001];
-  int i = 0, j;
-  char command[1000];
-
-  for (int j = 0; j < 10001; j++)
-    strcpy(users[j].username, "");
+  int nr;
+  int sd;
+  int pid;
+  pthread_t th[100];
+  int i = 0;
 
   if (sqlite3_open("data.db", &db) != SQLITE_OK)
   {
@@ -502,13 +769,15 @@ int main()
 
   if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
   {
-    perror("[server] Eroare la socket().\n");
+    perror("[server]Eroare la socket().\n");
     return errno;
   }
 
-  setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+  int on = 1;
+  setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
   bzero(&server, sizeof(server));
+  bzero(&from, sizeof(from));
 
   server.sin_family = AF_INET;
   server.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -516,245 +785,245 @@ int main()
 
   if (bind(sd, (struct sockaddr *)&server, sizeof(struct sockaddr)) == -1)
   {
-    perror("[server] Eroare la bind().\n");
+    perror("[server]Eroare la bind().\n");
     return errno;
   }
 
-  if (listen(sd, 5) == -1)
+  if (listen(sd, 10001) == -1)
   {
-    perror("[server] Eroare la listen().\n");
+    perror("[server]Eroare la listen().\n");
     return errno;
   }
-
-  FD_ZERO(&actfds);
-  FD_SET(sd, &actfds);
-
-  tv.tv_sec = 1;
-  tv.tv_usec = 0;
-
-  nfds = sd;
-
-  printf("[server] Asteptam la portul %d...\n", PORT);
-  fflush(stdout);
 
   while (1)
   {
 
-    bcopy((char *)&actfds, (char *)&readfds, sizeof(readfds));
+    int client;
+    thData *td;
+    int length = sizeof(from);
 
-    if (select(nfds + 1, &readfds, NULL, NULL, &tv) < 0)
+    printf("[server]Asteptam la portul %d...\n", PORT);
+    fflush(stdout);
+
+    if ((client = accept(sd, (struct sockaddr *)&from, &length)) < 0)
     {
-      perror("[server] Eroare la select().\n");
-      return errno;
+      perror("[server]Eroare la accept().\n");
+      continue;
     }
 
-    if (FD_ISSET(sd, &readfds))
+    td = (struct thData *)malloc(sizeof(struct thData));
+    td->idThread = i++;
+    td->cl = client;
+
+    users[client_index].fd = client;
+    strcpy(users[client_index].username, "");
+    users[client_index].in_chat = 0;
+    client_index++;
+
+    pthread_create(&th[i], NULL, &treat, td);
+  }
+}
+
+static void *treat(void *arg)
+{
+  struct thData tdL;
+  tdL = *((struct thData *)arg);
+  printf("[thread]- %d - Asteptam mesajul...\n", tdL.idThread);
+  fflush(stdout);
+  pthread_detach(pthread_self());
+  handleCommand((struct thData *)arg);
+  close((intptr_t)arg);
+  return (NULL);
+}
+
+void handleCommand(thData *td)
+{
+
+  while (1)
+  {
+
+    int i;
+    char command[10001] = "";
+    read(td->cl, command, 10001);
+
+    if (strcmp(command, "login") == 0)
     {
-      len = sizeof(from);
-      bzero(&from, sizeof(from));
+      printf("[Thread %d]Handling login command...\n", td->idThread);
 
-      client = accept(sd, (struct sockaddr *)&from, &len);
-
-      if (client < 0)
+      for (i = 0; i < client_index; i++)
       {
-        perror("[server] Eroare la accept().\n");
-        continue;
+        if (users[i].fd == td->cl)
+          break;
       }
-
-      if (nfds < client)
-        nfds = client;
-
-      FD_SET(client, &actfds);
-      users[i].fd = client;
-      i++;
-
-      printf("[server] S-a conectat clientul cu descriptorul %d, de la adresa %s.\n", client, conv_addr(from));
-      fflush(stdout);
+      login(&users[i]);
     }
-
-    for (int fd = 0; fd <= nfds; fd++)
+    else if (strcmp(command, "registration") == 0)
     {
-      if (fd != sd && FD_ISSET(fd, &readfds))
+      printf("[Thread %d]Handling registration command...\n", td->idThread);
+
+      for (i = 0; i < client_index; i++)
       {
-
-        bzero(command, 1000);
-        bzero(answ, sizeof(answ));
-
-        ssize_t bytes_received = recv(fd, command, sizeof(command), 0);
-
-        if (bytes_received <= 0)
+        if (users[i].fd == td->cl)
         {
-          for (j = 0; j < i; j++)
+          if (strlen(users[i].username) > 0)
           {
-            if (fd == users[j].fd)
+            strcpy(answ, "Sunteti autentificat.");
+            write(td->cl, answ, strlen(answ));
+          }
+          else
+          {
+            registration(td->cl);
+          }
+          break;
+        }
+      }
+    }
+    else if (strcmp(command, "logout") == 0)
+    {
+      printf("[Thread %d]Handling registration command...\n", td->idThread);
+
+      for (i = 0; i < client_index; i++)
+      {
+        if (users[i].fd == td->cl)
+        {
+
+          if (strlen(users[i].username) > 0)
+          {
+            strcpy(users[i].username, "");
+            strcpy(answ, "Logout cu succes.");
+            write(td->cl, answ, strlen(answ));
+          }
+          else
+          {
+            strcpy(answ, "Nu sunteti autentificat.");
+            write(td->cl, answ, strlen(answ));
+          }
+          break;
+        }
+      }
+    }
+    else if (strncmp(command, "add-friend : ", 13) == 0)
+    {
+      printf("[Thread %d]Handling add-friend command...\n", td->idThread);
+
+      for (i = 0; i < client_index; i++)
+      {
+        if (users[i].fd == td->cl)
+          break;
+      }
+      if (strlen(users[i].username) > 0 && userExists(command + 13) == 1)
+      {
+        if (strcmp(users[i].username, command + 13) == 0)
+        {
+          strcpy(answ, "Nu puteti sa va adaugati ca prieten propriu.");
+          write(td->cl, answ, strlen(answ));
+        }
+        else
+        {
+          add_friend(users[i], command + 13);
+        }
+      }
+      else
+      {
+        strcpy(answ, "Nu sunteti autentificati sau ati introdus un cont inexistent.");
+        write(td->cl, answ, strlen(answ));
+      }
+    }
+    else if (strcmp(command, "new-post") == 0)
+    {
+      printf("[Thread %d]Handling new-post command...\n", td->idThread);
+
+      for (i = 0; i < client_index; i++)
+      {
+        if (users[i].fd == td->cl)
+          break;
+      }
+      new_post(users[i]);
+    }
+    else if (strcmp(command, "show-users") == 0)
+    {
+      printf("[Thread %d]Handling show-users command...\n", td->idThread);
+      show_users(td->cl);
+    }
+    else if (strncmp(command, "chat : ", 7) == 0)
+    {
+      printf("[Thread %d]Handling chat command...\n", td->idThread);
+
+      for (i = 0; i < client_index; i++)
+      {
+        if (users[i].fd == td->cl)
+        {
+          if (strlen(users[i].username) > 0)
+          {
+            char *token = strtok(command + 7, " ");
+            int k = 2;
+            struct User a_users[999];
+            a_users[1] = users[i];
+            users[i].in_chat = 1;
+
+            while (token != NULL)
             {
-              users[j] = users[i - 1];
-              i--;
-              break;
+              printf("%s\n", token);
+
+              for (int q = 0; q < client_index; q++)
+              {
+                if (strcmp(users[q].username, token) == 0 && q != i)
+                {
+                  a_users[k] = users[q];
+                  a_users[k].in_chat = 1;
+                  k++;
+                  printf("%d : %d\n", k - 1, a_users[k - 1].fd);
+                }
+              }
+              token = strtok(NULL, " ");
             }
-          }
-          close(fd);
-          FD_CLR(fd, &actfds);
-          printf("[server] Client with descriptor %d disconnected.\n", fd);
-          continue;
-        }
-
-        if (strcmp(command, "registration") == 0)
-        {
-          for (j = 0; j < i; j++)
-          {
-            if (users[j].fd == fd)
+            if (k - 1 > 1)
             {
-              if (strlen(users[j].username) > 0)
-              {
-                strcpy(answ, "Sunteti autentificat.");
-                write(fd, answ, strlen(answ));
-              }
-              else
-              {
-                registration(fd);
-              }
-              break;
-            }
-          }
-          // strcpy(answ, "Cerere de registrare.");
-          // write(fd, answ, strlen(answ));
-        }
-        else if (strcmp(command, "login") == 0)
-        {
-          for (j = 0; j < i; j++)
-          {
-            if (users[j].fd == fd)
-              break;
-          }
-          login(&users[j]);
-          // strcpy(answ, "Cerere de logare.");
-          // write(fd, answ, strlen(answ));
-        }
-        else if (strcmp(command, "logout") == 0)
-        {
-          for (j = 0; j < i; j++)
-          {
-            if (users[j].fd == fd)
-            {
-
-              if (strlen(users[j].username) > 0)
-              {
-                strcpy(users[j].username, "");
-                strcpy(answ, "Logout cu succes.");
-                write(fd, answ, strlen(answ));
-              }
-              else
-              {
-                strcpy(answ, "Nu sunteti autentificat.");
-                write(fd, answ, strlen(answ));
-              }
-              break;
-            }
-          }
-
-          // strcpy(answ, "Cerere de iesire din cont.");
-          // write(fd, answ, strlen(answ));
-        }
-        else if (strncmp(command, "add-friend : ", 13) == 0)
-        {
-          // strcpy(answ, "Cerere de adaugeare prieten.");
-          // write(fd, answ, strlen(answ));
-          for (j = 0; j < i; j++)
-          {
-            if (users[j].fd == fd)
-              break;
-          }
-          if (strlen(users[j].username) > 0 && userExists(command + 13) == 1)
-          {
-            if (strcmp(users[j].username, command + 13) == 0)
-            {
-              strcpy(answ, "Nu puteti sa va adaugati ca prieten propriu.");
-              write(fd, answ, strlen(answ));
+              chat(a_users, k - 1);
             }
             else
             {
-              add_friend(users[j], command + 13);
+              strcpy(answ, "Din pacate utilizatorii mentionati nu sunt activi.");
+              write(td->cl, answ, strlen(answ));
             }
           }
           else
           {
-            strcpy(answ, "Nu sunteti autentificati sau ati introdus un cont inexistent.");
-            write(fd, answ, strlen(answ));
+            strcpy(answ, "Nu sunteti autentificat.");
+            write(td->cl, answ, strlen(answ));
           }
-        }
-        else if (strcmp(command, "new-post") == 0)
-        {
-          strcpy(answ, "Cerere de postare a unei noutati.");
-          write(fd, answ, strlen(answ));
-        }
-        else if (strcmp(command, "show-users") == 0)
-        {
-          // strcpy(answ, "Cerere de afisare utilizatori.");
-          // write(fd, answ, strlen(answ));
-          show_users(fd);
-        }
-        else if (strncmp(command, "chat : ", 7) == 0)
-        {
-          // strcpy(answ, "Cerere de creare chat.");
-          // write(fd, answ, strlen(answ));
-          for (j = 0; j < i; j++)
-          {
-            if (users[j].fd == fd)
-            {
-              if (strlen(users[j].username) > 0)
-              {
-                char *token = strtok(command + 7, " ");
-                int k = 2;
-                struct User a_users[999];
-                a_users[1] = users[j];
-
-                while (token != NULL)
-                {
-                  printf("%s\n", token);
-
-                  for (int q = 0; q < i; q++)
-                  {
-                    if (strcmp(users[q].username, token) == 0 && q != j)
-                    {
-                      a_users[k] = users[q];
-                      k++;
-                      printf("%d : %d\n", k - 1, a_users[k - 1].fd);
-                    }
-                  }
-                  token = strtok(NULL, " ");
-                }
-                if (k - 1 > 1)
-                {
-                  chat(a_users, k - 1);
-                }
-                else
-                {
-                  strcpy(answ, "Din pacate utilizatorii mentionati nu sunt activi.");
-                  write(fd, answ, strlen(answ));
-                }
-              }
-              else
-              {
-                strcpy(answ, "Nu sunteti autentificat.");
-                write(fd, answ, strlen(answ));
-              }
-              break;
-            }
-          }
-        }
-        else if (strncmp(command, "show-profile : ", 15) == 0)
-        {
-          strcpy(answ, "Cerere de vizualizare profil.");
-          write(fd, answ, strlen(answ));
-        }
-        else
-        {
-
-          strcpy(answ, "Comanda necunoscuta.");
-          write(fd, answ, strlen(answ));
+          break;
         }
       }
+    }
+    else if (strncmp(command, "show-profile : ", 15) == 0)
+    {
+      printf("[Thread %d]Handling show-profile command...\n", td->idThread);
+      for (i = 0; i < client_index; i++)
+      {
+        if (users[i].fd == td->cl)
+          break;
+      }
+      if (strlen(users[i].username) > 0 && userExists(command + 15) == 1)
+      {
+        show_profile(command + 15, users[i], 1);
+      }
+      else if (userExists(command + 15) == 1)
+      {
+        show_profile(command + 15, users[i], 0);
+      }
+      else
+      {
+        strcpy(answ, "Ati introdus un cont inexistent, incercati show-users.");
+        write(td->cl, answ, strlen(answ));
+      }
+    }
+    else
+    {
+      printf("[Thread %d]Unknown command: %s\n", td->idThread, command);
+
+      strcpy(answ, "Comanda necunoscuta.");
+      write(td->cl, answ, strlen(answ));
     }
   }
 }

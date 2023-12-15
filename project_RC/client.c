@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
 {
   int sd;
   struct sockaddr_in server;
-  char msg[100];
+  char msg[1000];
   fd_set readfds;
   int nfds;
 
@@ -60,9 +60,9 @@ int main(int argc, char *argv[])
 
     if (FD_ISSET(sd, &readfds))
     {
-      bzero(msg, 100);
+      bzero(msg, 1000);
 
-      if (read(sd, msg, 100) <= 0)
+      if (read(sd, msg, 1000) <= 0)
       {
         printf("Server deconectat.\n");
         break;
@@ -74,8 +74,8 @@ int main(int argc, char *argv[])
 
     if (FD_ISSET(0, &readfds))
     {
-      bzero(msg, 100);
-      read(0, msg, 100);
+      bzero(msg, 1000);
+      read(0, msg, 1000);
 
       while (msg[0] == ' ' || msg[0] == '\t' || msg[0] == '\n')
       {
