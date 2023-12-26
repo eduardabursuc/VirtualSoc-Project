@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <fcntl.h>
 #include <time.h>
 
 #define PORT 2222
@@ -19,7 +20,8 @@ struct User
 {
   int fd;
   char username[101];
-  int in_chat;
+  int chat_request;
+  int chat_accepted;
 } users[10001];
 
 int client_index = 0;
@@ -79,6 +81,12 @@ int createTables()
   }
 
   return 0;
+}
+
+struct User *userByFd( int fd ) {
+  for( int i = 0 ; i < client_index; i++ ){
+    if( fd == users[i].fd ) return &users[i];
+  }
 }
 
 int userExists(char username[])
@@ -604,7 +612,6 @@ void show_profile(char username[], struct User user, int status)
           }
           else
           {
-
             strcpy(answ, "Utilizatorul nu are noutati publicate.");
             write(user.fd, answ, strlen(answ));
           }
@@ -660,29 +667,38 @@ void show_profile(char username[], struct User user, int status)
 
 // CHAT
 
-void chat(struct User usrs[], int n)
+void chat(int fds[], int n)
 {
 
   char message[1001];
   bzero(message, 1001);
 
-  for (int i = 1; i <= n; i++)
+  for (int i = 0; i < n; i++)
   {
-    strcpy(answ, "Pregatire chat.");
-    write(usrs[i].fd, answ, strlen(answ));
+    strcpy(answ, "Pregatire chat...");
+    write(fds[i], answ, strlen(answ));
+    
   }
 
-  while (n != 1)
+  sleep(10);
+
+  while (1)
   {
     fd_set readfds;
-    int nfds = usrs[0].fd;
+    int nfds = fds[0];
     FD_ZERO(&readfds);
+    int accepted = 0;
 
-    for (int i = 1; i <= n; i++)
+    for (int i = 0; i < n; i++)
     {
-      FD_SET(usrs[i].fd, &readfds);
-      if (nfds < usrs[i].fd)
-        nfds = usrs[i].fd;
+      if ( userByFd(fds[i])->chat_accepted )
+        {
+          FD_SET(fds[i], &readfds);
+          if (nfds < fds[i])
+            nfds = fds[i];
+          accepted ++;
+        }
+      
     }
 
     if (select(nfds + 1, &readfds, NULL, NULL, NULL) < 0)
@@ -690,49 +706,42 @@ void chat(struct User usrs[], int n)
       perror("[server]Eroare la select().\n");
     }
 
-    for (int i = 1; i <= n; i++)
+    for (int i = 0; i < accepted; i++)
     {
-      if (FD_ISSET(usrs[i].fd, &readfds))
+
+      if (FD_ISSET(fds[i], &readfds))
       {
         bzero(message, 1001);
-        if (read(usrs[i].fd, message, 1001) <= 0 || strcmp(message, "stop-chat") == 0)
+        if (read(fds[i], message, 1001) <= 0 || strcmp(message, "stop-chat") == 0)
         {
 
           strcpy(answ, "Ati iesit din chat.");
-          write(usrs[i].fd, answ, strlen(answ));
-          for (int j = 0; j < client_index; j++)
-          {
-            if (usrs[i].fd == users[j].fd)
-              users[j].fd = 0;
-          }
-          usrs[i].in_chat = 0;
-          usrs[i] = usrs[n];
-          n--;
-          if (n == 1)
+          write(fds[i], answ, strlen(answ));
+          userByFd(fds[i])->chat_accepted = 0;
+          fds[i] = fds[accepted - 1];
+          accepted--;
+          if (accepted == 1)
           {
             strcpy(answ, "Chat inchis.");
-            write(usrs[i].fd, answ, strlen(answ));
-            for (int j = 0; j < client_index; j++)
-            {
-              if (usrs[i].fd == users[j].fd)
-                users[j].fd = 0;
-            }
+            write(fds[0], answ, strlen(answ));
+            userByFd(fds[0])->chat_accepted = 0;
+            break;
           }
           printf("Server deconectat.\n");
           break;
         }
         else
         {
-          for (int j = 1; j <= n; j++)
+          for (int j = 0; j < accepted; j++)
           {
-            if (usrs[i].fd != usrs[j].fd)
+            if (fds[j] != fds[i])
             {
               char aux[1200];
               bzero(aux, 1200);
-              strcpy(aux, usrs[i].username);
+              strcpy(aux, userByFd(fds[i])->username);
               strcat(aux, " : ");
               strcat(aux, message);
-              write(usrs[j].fd, aux, strlen(aux));
+              write(fds[j], aux, strlen(aux));
             }
           }
         }
@@ -817,7 +826,7 @@ int main()
 
     users[client_index].fd = client;
     strcpy(users[client_index].username, "");
-    users[client_index].in_chat = 0;
+    users[client_index].chat_request = 0;
     client_index++;
 
     pthread_create(&th[i], NULL, &treat, td);
@@ -839,14 +848,39 @@ static void *treat(void *arg)
 void handleCommand(thData *td)
 {
 
-  while (1)
-  {
 
+  while (1)
+  { 
+    
     int i;
     char command[10001] = "";
-    read(td->cl, command, 10001);
+    read(td->cl, command, sizeof(command));
+   
+    if (strcmp(command, "accept") == 0)
+    {
 
-    if (strcmp(command, "login") == 0)
+      for (i = 0; i < client_index; i++)
+      {
+
+        if ( users[i].fd == td->cl && users[i].chat_request && users[i].chat_accepted == 0)
+        {
+          users[i].chat_accepted = 1;
+          users[i].chat_request = 0;
+          while (users[i].chat_accepted)
+          {
+            sleep(1);
+          }
+          break;
+        }
+        else if (users[i].fd == td->cl && users[i].chat_request == 0)
+        {
+          strcpy(answ, "Comanda necunoscuta.");
+          write(td->cl, answ, strlen(answ));
+          break;
+        }
+      }
+    }
+    else if (strcmp(command, "login") == 0)
     {
       printf("[Thread %d]Handling login command...\n", td->idThread);
 
@@ -956,43 +990,46 @@ void handleCommand(thData *td)
           if (strlen(users[i].username) > 0)
           {
             char *token = strtok(command + 7, " ");
-            int k = 2;
-            struct User a_users[999];
-            a_users[1] = users[i];
-            users[i].in_chat = 1;
+            int k = 1;
+            int *fds = malloc(999*(sizeof(int)));
+
+            if (fds == NULL)
+            {
+              perror("Failed to allocate memory for a_users");
+              return;
+            }
+
+            fds[0] = users[i].fd;
+            users[i].chat_accepted = 1;
 
             while (token != NULL)
             {
-              printf("%s\n", token);
 
               for (int q = 0; q < client_index; q++)
               {
                 if (strcmp(users[q].username, token) == 0 && q != i)
                 {
-                  a_users[k] = users[q];
-                  a_users[k].in_chat = 1;
+                  fds[k] = users[q].fd;
+                  users[q].chat_request = 1;
                   k++;
-                  printf("%d : %d\n", k - 1, a_users[k - 1].fd);
                 }
               }
               token = strtok(NULL, " ");
             }
-            if (k - 1 > 1)
+
+            if (k - 1 > 0)
             {
-              chat(a_users, k - 1);
+              chat(fds, k);
             }
             else
             {
               strcpy(answ, "Din pacate utilizatorii mentionati nu sunt activi.");
               write(td->cl, answ, strlen(answ));
             }
+
+            // Free the dynamically allocated memory
+            free(fds);
           }
-          else
-          {
-            strcpy(answ, "Nu sunteti autentificat.");
-            write(td->cl, answ, strlen(answ));
-          }
-          break;
         }
       }
     }
