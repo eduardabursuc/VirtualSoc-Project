@@ -8,10 +8,29 @@
 #include <stdlib.h>
 #include <netdb.h>
 #include <string.h>
+#include <termios.h>
+#include <unistd.h>
 
 extern int errno;
 
 int port;
+
+void disable_echo()
+{
+  struct termios t;
+  tcgetattr(STDIN_FILENO, &t);
+  t.c_lflag &= ~ECHO;
+  tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
+// Function to enable terminal echo
+void enable_echo()
+{
+  struct termios t;
+  tcgetattr(STDIN_FILENO, &t);
+  t.c_lflag |= ECHO;
+  tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
 
 int main(int argc, char *argv[])
 {
@@ -67,13 +86,25 @@ int main(int argc, char *argv[])
         printf("Server deconectat.\n");
         break;
       }
-      printf("%s\n", msg);
-      fflush(stdout);
-      
+      if (strncmp(msg, "Parola", 6) == 0)
+      {
+        char answer[1001];
+        strcpy(answer, msg);
+        strcat(answer, "\n");
+        bzero(msg, 1000);
+        strcpy(msg, getpass(answer));
+        write(sd, msg, strlen(msg));
+      }
+      else
+      {
+        printf("%s\n", msg);
+        fflush(stdout);
+      }
     }
 
     if (FD_ISSET(0, &readfds))
     {
+
       bzero(msg, 1000);
       read(0, msg, 1000);
 
@@ -92,5 +123,4 @@ int main(int argc, char *argv[])
   }
 
   close(sd);
-
 }

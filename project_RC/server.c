@@ -11,6 +11,7 @@
 #include <sqlite3.h>
 #include <fcntl.h>
 #include <time.h>
+#include <stdint.h>
 
 #define PORT 2222
 
@@ -189,7 +190,7 @@ void registration(int fd)
   }
   else if (exists == 0)
   {
-    strcpy(answ, "Introduceti o parola: ");
+    strcpy(answ, "Parola dorita: ");
     write(fd, answ, strlen(answ));
     read(fd, passwd, 100);
     sqlite3_stmt *statement;
@@ -264,7 +265,7 @@ void login(struct User *user)
             strcpy(answ, "Parola:");
           }
           else
-            strcpy(answ, "Parola gresita.\nIntroduceti alta parola:");
+            strcpy(answ, "Parola gresita.\nIncercati o alta parola:");
           fflush(stdout);
           write(user->fd, answ, strlen(answ));
           read(user->fd, passwd, 100);
@@ -477,7 +478,7 @@ void new_post(struct User user)
 
     int stepResult = sqlite3_step(statement);
 
-    if (stepResult == SQLITE_ROW)
+    if (stepResult != SQLITE_DONE)
     {
       const char *stored_content = (const char *)sqlite3_column_text(statement, 0);
 
@@ -485,6 +486,10 @@ void new_post(struct User user)
 
       char post[100001];
       sprintf(post, "%s%s     %s\n%s\n\n", stored_content, user.username, formattedDateTime, content);
+
+      if (strncmp(post, "(null)", 6) == 0 ) {
+        strcpy(post, post + 6);
+      }
 
       if (sqlite3_prepare_v2(db, updateDataSQL, -1, &statement, 0) == SQLITE_OK)
       {
@@ -608,6 +613,9 @@ void show_profile(char username[], struct User user, int status)
             if (sqlite3_column_type(statement, 1) != SQLITE_NULL)
               strcat(answ, public_posts);
 
+            if (strlen(answ) == 0) {
+              strcpy(answ, "Utilizatorul nu are noutati publicate.");
+            }
             write(user.fd, answ, strlen(answ));
           }
           else
@@ -645,7 +653,7 @@ void show_profile(char username[], struct User user, int status)
 
       int selectResult = sqlite3_step(statement);
 
-      if (selectResult == SQLITE_ROW)
+      if (selectResult != SQLITE_DONE)
       {
         const char *public_posts = (const char *)sqlite3_column_text(statement, 0);
 
@@ -682,12 +690,14 @@ void chat(int fds[], int n)
 
   sleep(10);
 
-  while (1)
+  int accepted = n;
+
+  while (accepted > 1)
   {
     fd_set readfds;
     int nfds = fds[0];
     FD_ZERO(&readfds);
-    int accepted = 0;
+    accepted = 0;
 
     for (int i = 0; i < n; i++)
     {
@@ -725,10 +735,10 @@ void chat(int fds[], int n)
             strcpy(answ, "Chat inchis.");
             write(fds[0], answ, strlen(answ));
             userByFd(fds[0])->chat_accepted = 0;
+            FD_ZERO(&readfds);
             break;
           }
-          printf("Server deconectat.\n");
-          break;
+
         }
         else
         {
@@ -758,8 +768,8 @@ int main()
 
   struct sockaddr_in server;
   struct sockaddr_in from;
-  int nr;
   int sd;
+  int nr;
   int pid;
   pthread_t th[100];
   int i = 0;
@@ -827,6 +837,7 @@ int main()
     users[client_index].fd = client;
     strcpy(users[client_index].username, "");
     users[client_index].chat_request = 0;
+    users[client_index].chat_accepted = 0;
     client_index++;
 
     pthread_create(&th[i], NULL, &treat, td);
@@ -841,7 +852,7 @@ static void *treat(void *arg)
   fflush(stdout);
   pthread_detach(pthread_self());
   handleCommand((struct thData *)arg);
-  close((intptr_t)arg);
+  close((intptr_t) arg);
   return (NULL);
 }
 
@@ -854,7 +865,11 @@ void handleCommand(thData *td)
     
     int i;
     char command[10001] = "";
-    read(td->cl, command, sizeof(command));
+
+    if (read(td->cl, command, sizeof(command)) <= 0 ){
+      printf("[Thread %d] Client disconnected.\n", td->idThread);
+      break;
+    }
    
     if (strcmp(command, "accept") == 0)
     {
@@ -1063,4 +1078,7 @@ void handleCommand(thData *td)
       write(td->cl, answ, strlen(answ));
     }
   }
+  close(td->cl);
+  free(td);
+  pthread_exit(NULL);
 }
