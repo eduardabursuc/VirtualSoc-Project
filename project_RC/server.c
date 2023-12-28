@@ -730,6 +730,7 @@ void chat(int fds[], int n)
           userByFd(fds[i])->chat_accepted = 0;
           fds[i] = fds[accepted - 1];
           accepted--;
+          n--;
           if (accepted == 1)
           {
             strcpy(answ, "Chat inchis.");
@@ -739,6 +740,10 @@ void chat(int fds[], int n)
             break;
           }
 
+          for( int j = 0; j < accepted; j++ ) {
+            printf("%d - %s\n", j, userByFd(fds[j])->username);
+          }
+          break;
         }
         else
         {
@@ -757,6 +762,7 @@ void chat(int fds[], int n)
         }
       }
     }
+
   }
 }
 
@@ -859,7 +865,6 @@ static void *treat(void *arg)
 void handleCommand(thData *td)
 {
 
-
   while (1)
   { 
     
@@ -867,6 +872,13 @@ void handleCommand(thData *td)
     char command[10001] = "";
 
     if (read(td->cl, command, sizeof(command)) <= 0 ){
+      for( i = 0; i < client_index; i++ ){
+        if ( td->cl == users[i].fd ) {
+          users[i] = users[client_index - 1];
+          client_index --;
+        }
+      }
+      
       printf("[Thread %d] Client disconnected.\n", td->idThread);
       break;
     }
@@ -929,7 +941,7 @@ void handleCommand(thData *td)
     }
     else if (strcmp(command, "logout") == 0)
     {
-      printf("[Thread %d]Handling registration command...\n", td->idThread);
+      printf("[Thread %d]Handling logout command...\n", td->idThread);
 
       for (i = 0; i < client_index; i++)
       {
