@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
 {
   int sd;
   struct sockaddr_in server;
-  char msg[1000];
+  char msg[10000];
   fd_set readfds;
   int nfds;
 
@@ -79,9 +79,9 @@ int main(int argc, char *argv[])
 
     if (FD_ISSET(sd, &readfds))
     {
-      bzero(msg, 1000);
+      bzero(msg, 10000);
 
-      if (read(sd, msg, 1000) <= 0)
+      if (read(sd, msg, 10000) <= 0)
       {
         printf("Server deconectat.\n");
         break;
@@ -90,14 +90,13 @@ int main(int argc, char *argv[])
       {
         char answer[1001];
         strcpy(answer, msg);
-        strcat(answer, "\n");
-        bzero(msg, 1000);
+        bzero(msg, 10000);
         strcpy(msg, getpass(answer));
         write(sd, msg, strlen(msg));
       }
       else
       {
-        printf("%s\n", msg);
+        printf("%s", msg);
         fflush(stdout);
       }
     }
@@ -105,13 +104,13 @@ int main(int argc, char *argv[])
     if (FD_ISSET(0, &readfds))
     {
 
-      bzero(msg, 1000);
-      read(0, msg, 1000);
+      bzero(msg, 10000);
+      read(0, msg, 10000);
 
       while (msg[0] == ' ' || msg[0] == '\t' || msg[0] == '\n')
       {
         printf("Date invalide. Incercati din nou.\n");
-        read(0, msg, 100);
+        read(0, msg, 10000);
       }
 
       if (write(sd, msg, strlen(msg) - 1) < 0)
@@ -119,6 +118,7 @@ int main(int argc, char *argv[])
         perror("ERROR writing to socket");
         break;
       }
+
     }
   }
 
