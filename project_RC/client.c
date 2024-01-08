@@ -15,23 +15,6 @@ extern int errno;
 
 int port;
 
-void disable_echo()
-{
-  struct termios t;
-  tcgetattr(STDIN_FILENO, &t);
-  t.c_lflag &= ~ECHO;
-  tcsetattr(STDIN_FILENO, TCSANOW, &t);
-}
-
-// Function to enable terminal echo
-void enable_echo()
-{
-  struct termios t;
-  tcgetattr(STDIN_FILENO, &t);
-  t.c_lflag |= ECHO;
-  tcsetattr(STDIN_FILENO, TCSANOW, &t);
-}
-
 int main(int argc, char *argv[])
 {
   int sd;

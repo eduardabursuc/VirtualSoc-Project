@@ -163,7 +163,11 @@ void registration(int fd)
     bzero(type_usr, 10);
     strcpy(answ, "Introduceti un cuvant cheie admin/user.\n");
     write(fd, answ, strlen(answ));
-    read(fd, type_usr, 10);
+    if (read(fd, type_usr, 10) <= 0 ) {
+      printf("Client disconnected.\n");
+      pthread_exit(NULL);
+    }
+
   }
 
   strcpy(answ, "Doriti sa creati un cont public sau privat? (public/privat)\n");
@@ -175,7 +179,10 @@ void registration(int fd)
     bzero(type_acc, 10);
     strcpy(answ, "Introduceti un cuvant cheie public/privat.\n");
     write(fd, answ, strlen(answ));
-    read(fd, type_acc, 10);
+    if (read(fd, type_acc, 10) <= 0 ){
+      printf("Client disconnected.\n");
+      pthread_exit(NULL);
+    }
   }
 
   strcpy(answ, "Introduceti un username: \n");
@@ -274,7 +281,10 @@ void login(struct User *user)
             strcpy(answ, "Parola gresita.\nIncercati o alta parola:\n");
           fflush(stdout);
           write(user->fd, answ, strlen(answ) - 1);
-          read(user->fd, passwd, 100);
+          if (read(user->fd, passwd, 100) <= 0){
+            printf("Client disconnected.\n");
+            pthread_exit(NULL);
+          }
         }
 
         strcpy(user->username, username);
@@ -339,7 +349,10 @@ void add_friend(struct User user, char friend[])
   {
     strcpy(answ, "Introduceti doar cuvantul cheie (friend/close-friend):\n");
     write(user.fd, answ, strlen(answ));
-    read(user.fd, relationship, 31);
+    if (read(user.fd, relationship, 31) <= 0) {
+      printf("Client disconnected.\n");
+      pthread_exit(NULL);
+    }
   }
 
   const char *updateDataSQL = "UPDATE friends SET type_of_friend = ? WHERE host_username = ? AND friend_username = ?;";
@@ -437,7 +450,10 @@ void new_post(struct User user)
   {
     strcpy(answ, "Introduceti doar cuvantul cheie (public/friend/close-friend):\n");
     write(user.fd, answ, strlen(answ));
-    read(user.fd, type, 21);
+    if (read(user.fd, type, 21) <= 0) {
+      printf("Client disconnected.\n");
+      pthread_exit(NULL);
+    }
   }
 
   const char *selectDataSQL;
@@ -619,16 +635,27 @@ void show_profile(char username[], struct User user, int status)
 
           if (sqlite3_step(statement) != SQLITE_DONE)
           {
-
+            int ok = 0;
             const char *friend_posts = (const char *)sqlite3_column_text(statement, 0);
             const char *public_posts = (const char *)sqlite3_column_text(statement, 1);
 
-            if (sqlite3_column_type(statement, 0) != SQLITE_NULL)
+            if (sqlite3_column_type(statement, 0) != SQLITE_NULL && strlen(friend_posts) > 0)
+            {
               write(user.fd, friend_posts, strlen(friend_posts));
+              ok = 1;
+            }
+              
 
-            if (sqlite3_column_type(statement, 1) != SQLITE_NULL)
+            if (sqlite3_column_type(statement, 1) != SQLITE_NULL && strlen(public_posts) > 0)
+            {
               write(user.fd, public_posts, strlen(public_posts));
-
+              ok = 1;
+            }
+              
+            if ( ok == 0 ){
+              strcpy(answ, "Utilizatorul nu are postari.\n");
+              write(user.fd, answ, strlen(answ));
+            }
           }
           else
           {
@@ -1015,7 +1042,13 @@ void handleCommand(thData *td)
         if (users[i].fd == td->cl)
           break;
       }
-      new_post(users[i]);
+      if(strlen(users[i].username) > 0 ){
+        new_post(users[i]);
+      } else {
+        strcpy(answ, "Nu sunteti autentificat.\n");
+        write(td->cl, answ, strlen(answ));
+      }
+      
     }
     else if (strcmp(command, "show-users") == 0)
     {
@@ -1062,7 +1095,7 @@ void handleCommand(thData *td)
 
             if (k - 1 > 0)
             {
-              chat(fds, k);
+                chat(fds, k);
             }
             else
             {
@@ -1072,6 +1105,9 @@ void handleCommand(thData *td)
 
             // Free the dynamically allocated memory
             free(fds);
+          } else {
+              strcpy(answ, "Nu sunteti autentificat.\n");
+              write(td->cl, answ, strlen(answ));
           }
         }
       }
